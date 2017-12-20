@@ -728,19 +728,16 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
         if self.recordingEnabled && self.recordingRGBPerFrameFinished==false {
             DispatchQueue.global().async {
                 autoreleasepool {
-                    
                     self.recordingRGBPerFrameFinished = true
-                    
                     let image = self.imageFromPixelBuffer(pixelBuffer: videoPixelBuffer).fixedOrientation().rotate(radians: Float(90.0*Double.pi/180.0))
-                    
-                    //let imageData = UIImageJPEGRepresentation(image!, 1.0)
-                    
                     let rgbFolderPath = self.getFolderPath(imagePath: "RGBImages")
                     let rgbFolderURL = NSURL.fileURL(withPath: rgbFolderPath)
                     var fileName = self.currentTime
                     fileName.append(".jpeg")
                     let imageURL = rgbFolderURL.appendingPathComponent(fileName)
                     self.saveFile(fileUrl: imageURL, image: image!, fileType: kUTTypeJPEG)
+                    
+                    //let imageData = UIImageJPEGRepresentation(image!, 1.0)
                     //try! imageData?.write(to: imageURL)
                 }
             }
@@ -814,8 +811,6 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
                     
                     let image = self.imageFromPixelBuffer(pixelBuffer: depthPixelBuffer).fixedOrientation().rotate(radians: Float(90.0*Double.pi/180.0))
                     
-                    //let imageData = UIImagePNGRepresentation(image!)
-                    
                     let rgbFolderPath = self.getFolderPath(imagePath: "DepthImages")
                     let rgbFolderURL = NSURL.fileURL(withPath: rgbFolderPath)
                     var fileName = self.currentTime
@@ -823,6 +818,8 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
                     let imageURL = rgbFolderURL.appendingPathComponent(fileName)
                     
                     self.saveFile(fileUrl: imageURL, image: image!, fileType: kUTTypePNG)
+                    
+                    //let imageData = UIImagePNGRepresentation(image!)
                     //try! imageData?.write(to: imageURL)
                 }
             }
