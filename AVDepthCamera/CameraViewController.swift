@@ -12,6 +12,7 @@ import Photos
 import VideoToolbox
 import MobileCoreServices
 
+@available(iOS 11.1, *)
 class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureDepthDataOutputDelegate, AVCaptureDataOutputSynchronizerDelegate {
 
 	// MARK: - Properties
@@ -43,52 +44,44 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
 	private let dataOutputQueue = DispatchQueue(label: "video data queue", qos: .userInitiated, attributes: [], autoreleaseFrequency: .workItem)
 
 	private let videoDataOutput = AVCaptureVideoDataOutput()
-
 	private let depthDataOutput = AVCaptureDepthDataOutput()
-
 	private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
-
 	private let photoOutput = AVCapturePhotoOutput()
 
 	private let filterRenderers: [FilterRenderer] = [RosyMetalRenderer(), RosyCIRenderer()]
-
 	private let photoRenderers: [FilterRenderer] = [RosyMetalRenderer(), RosyCIRenderer()]
 
 	private let videoDepthMixer = VideoMixer()
-
 	private let photoDepthMixer = VideoMixer()
-
-	private var filterIndex: Int = 0
-
 	private var videoFilter: FilterRenderer?
-
 	private var photoFilter: FilterRenderer?
 
 	private let videoDepthConverter = DepthToGrayscaleConverter()
-
 	private let photoDepthConverter = DepthToGrayscaleConverter()
 
 	private var currentDepthPixelBuffer: CVPixelBuffer?
 
 	private var renderingEnabled = true
-
 	private var depthVisualizationEnabled = true
-    
     private var recordingEnabled = false
     private var recordingRGBPerFrameFinished = false
     private var recordingDepthPerFrameFinished = false
+    private var isShowRGBRawData = false
+    
+    private var totalTimeIntervalForDepth = 0.0 as Double
+    private var totalTimeIntervalForRGB = 0.0 as Double
 
 	private let processingQueue = DispatchQueue(label: "photo processing queue", attributes: [], autoreleaseFrequency: .workItem)
 
-	private let videoDeviceDiscoverySession = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInDualCamera,.builtInWideAngleCamera],mediaType: .video,position: .unspecified)
+	private let videoDeviceDiscoverySession = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInTrueDepthCamera],mediaType: .video,position: .front)
 
 	private var statusBarOrientation: UIInterfaceOrientation = .portrait
     
     private var currentTime:String{
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMddHHmmss"
-        let fileName = formatter.string(from: NSDate() as Date)
-        return fileName;
+        formatter.dateFormat = "yyyyMMddHHmmssSSSS"
+        let time = formatter.string(from: NSDate() as Date)
+        return time;
     }
     
     // MARK: - File Manager
@@ -157,8 +150,6 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         self.configDepthEnabled()
-        self.configDepthSmoothing()
-        self.setMixFactor()
     }
 
 	override func viewWillAppear(_ animated: Bool) {
@@ -392,8 +383,7 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
 		}
 
 		session.beginConfiguration()
-
-		session.sessionPreset = AVCaptureSession.Preset.photo
+		session.sessionPreset = AVCaptureSession.Preset.hd1280x720
 
 		// Add a video input
 		guard session.canAddInput(videoDeviceInput) else {
@@ -441,7 +431,7 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
 		if session.canAddOutput(depthDataOutput) {
 			session.addOutput(depthDataOutput)
 			depthDataOutput.setDelegate(self, callbackQueue: dataOutputQueue)
-			depthDataOutput.isFilteringEnabled = false
+			depthDataOutput.isFilteringEnabled = true
             if let connection = depthDataOutput.connection(with: .depthData) {
                 connection.isEnabled = depthVisualizationEnabled
             } else {
@@ -546,33 +536,25 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
 		}
 	}
 
-	func setMixFactor() {
-		dataOutputQueue.async {
-			self.videoDepthMixer.mixFactor = 1.0
-		}
-
-		processingQueue.async {
-			self.photoDepthMixer.mixFactor = 1.0
-		}
-	}
-
-	func configDepthSmoothing() {
-		let smoothingEnabled = true
-
-		sessionQueue.async {
-			self.depthDataOutput.isFilteringEnabled = smoothingEnabled
-		}
-	}
-
 	@IBAction private func focusAndExposeTap(_ gesture: UITapGestureRecognizer) {
-		let location = gesture.location(in: previewView)
+        
+        dataOutputQueue.async {
+            if self.videoDepthMixer.mixFactor == 1.0 {
+                self.videoDepthMixer.mixFactor = 0.0
+            }else{
+                self.videoDepthMixer.mixFactor = 1.0
+            }
+        }
+
+        
+		/*let location = gesture.location(in: previewView)
 		guard let texturePoint = previewView.texturePointForView(point: location) else {
 			return
 		}
 
 		let textureRect = CGRect(origin: texturePoint, size: .zero)
 		let deviceRect = videoDataOutput.metadataOutputRectConverted(fromOutputRect: textureRect)
-		focus(with: .autoFocus, exposureMode: .autoExpose, at: deviceRect.origin, monitorSubjectAreaChange: true)
+		focus(with: .autoFocus, exposureMode: .autoExpose, at: deviceRect.origin, monitorSubjectAreaChange: true)*/
 	}
 
 @objc
@@ -725,23 +707,28 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
 			return
 		}
         
-        if self.recordingEnabled && self.recordingRGBPerFrameFinished==false {
-            DispatchQueue.global().async {
-                autoreleasepool {
-                    self.recordingRGBPerFrameFinished = true
-                    let image = self.imageFromPixelBuffer(pixelBuffer: videoPixelBuffer).fixedOrientation().rotate(radians: Float(90.0*Double.pi/180.0))
-                    let rgbFolderPath = self.getFolderPath(imagePath: "RGBImages")
-                    let rgbFolderURL = NSURL.fileURL(withPath: rgbFolderPath)
-                    var fileName = self.currentTime
-                    fileName.append(".jpeg")
-                    let imageURL = rgbFolderURL.appendingPathComponent(fileName)
-                    self.saveFile(fileUrl: imageURL, image: image!, fileType: kUTTypeJPEG)
-                    
-                    //let imageData = UIImageJPEGRepresentation(image!, 1.0)
-                    //try! imageData?.write(to: imageURL)
+        /*let startTime = Double(self.currentTime)
+        let elapsed = startTime!-self.totalTimeIntervalForRGB
+        if elapsed >= 1700 {//5 frame per seconds
+            self.totalTimeIntervalForRGB = Double(self.currentTime)!
+            if self.recordingEnabled && self.recordingRGBPerFrameFinished==false {
+                DispatchQueue.global().async {
+                    autoreleasepool {
+                        self.recordingRGBPerFrameFinished = true
+                        let image = self.imageFromPixelBuffer(pixelBuffer: videoPixelBuffer).fixedOrientation().rotate(radians: Float(90.0*Double.pi/180.0))
+                        let rgbFolderPath = self.getFolderPath(imagePath: "RGBImages")
+                        let rgbFolderURL = NSURL.fileURL(withPath: rgbFolderPath)
+                        var fileName = self.currentTime
+                        fileName.append(".jpeg")
+                        let imageURL = rgbFolderURL.appendingPathComponent(fileName)
+                        self.saveFile(fileUrl: imageURL, image: image!, fileType: kUTTypeJPEG)
+                        
+                        //let imageData = UIImageJPEGRepresentation(image!, 1.0)
+                        //try! imageData?.write(to: imageURL)
+                    }
                 }
             }
-        }
+        }*/
         
 		var finalVideoPixelBuffer = videoPixelBuffer
 		if depthVisualizationEnabled {
@@ -803,24 +790,25 @@ class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVC
 			return
 		}
         
-        if self.recordingEnabled && self.recordingDepthPerFrameFinished==false {
-            DispatchQueue.global().async {
-                autoreleasepool {
-                    
-                    self.recordingDepthPerFrameFinished = true
-                    
-                    let image = self.imageFromPixelBuffer(pixelBuffer: depthPixelBuffer).fixedOrientation().rotate(radians: Float(90.0*Double.pi/180.0))
-                    
-                    let rgbFolderPath = self.getFolderPath(imagePath: "DepthImages")
-                    let rgbFolderURL = NSURL.fileURL(withPath: rgbFolderPath)
-                    var fileName = self.currentTime
-                    fileName.append(".png")
-                    let imageURL = rgbFolderURL.appendingPathComponent(fileName)
-                    
-                    self.saveFile(fileUrl: imageURL, image: image!, fileType: kUTTypePNG)
-                    
-                    //let imageData = UIImagePNGRepresentation(image!)
-                    //try! imageData?.write(to: imageURL)
+        let startTime = Double(self.currentTime)
+        let elapsed = startTime!-self.totalTimeIntervalForDepth
+        if elapsed >= 1700 {//5 frame per seconds
+            self.totalTimeIntervalForDepth = Double(self.currentTime)!
+            if self.recordingEnabled && self.recordingDepthPerFrameFinished==false {
+                DispatchQueue.global().async {
+                    autoreleasepool {
+                        self.recordingDepthPerFrameFinished = true
+                        let image = self.imageFromPixelBuffer(pixelBuffer: depthPixelBuffer).fixedOrientation().rotate(radians: Float(90.0*Double.pi/180.0))
+                        let rgbFolderPath = self.getFolderPath(imagePath: "DepthImages")
+                        let rgbFolderURL = NSURL.fileURL(withPath: rgbFolderPath)
+                        var fileName = self.currentTime
+                        fileName.append(".png")
+                        let imageURL = rgbFolderURL.appendingPathComponent(fileName)
+                        self.saveFile(fileUrl: imageURL, image: image!, fileType: kUTTypePNG)
+                        
+                        //let imageData = UIImagePNGRepresentation(image!)
+                        //try! imageData?.write(to: imageURL)
+                    }
                 }
             }
         }

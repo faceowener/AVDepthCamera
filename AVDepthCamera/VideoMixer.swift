@@ -34,7 +34,7 @@ class VideoMixer {
 
     private var fullRangeVertexBuffer: MTLBuffer
 
-	var mixFactor: Float = 0.5
+	var mixFactor: Float = 1.0
 
 	required init() {
         let vertexData: [Float] = [
